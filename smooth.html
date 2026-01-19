@@ -1,0 +1,248 @@
+<svg id="svg" width="1000" height="500" style="border: 2px solid black"></svg>
+<script>
+  const svg = document.getElementById("svg");
+
+  const MAX_DEVIATION = 5;
+  const BLEND_LEN = 10;
+  const VARIABLE = 15;
+
+  let drawing = false;
+  let samples = [];
+  let segments = [];
+  let blends = [];
+
+  let markers = []; // {l, circleBefore, circleCenter, circleAfter}
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("stroke", "black");
+  path.setAttribute("stroke-width", "3");
+  path.setAttribute("fill", "none");
+  svg.appendChild(path);
+
+  // ---------------- EVENTS ----------------
+  svg.addEventListener("mousedown", (e) => {
+    drawing = true;
+    samples = [{ x: e.offsetX, y: e.offsetY }];
+    segments = [];
+    blends = [];
+    markers = [];
+    path.setAttribute("d", "");
+    svg.querySelectorAll(".dot,.split,.marker").forEach((d) => d.remove());
+    drawDot(e.offsetX, e.offsetY);
+  });
+
+  svg.addEventListener("mousemove", (e) => {
+    if (!drawing) return;
+
+    const p = { x: e.offsetX, y: e.offsetY };
+    samples.push(p);
+    drawDot(p.x, p.y);
+
+    if (samples.length < 3) return;
+
+    const curve = fitQuadratic(samples, lastSeg());
+    const dev = maxDeviation(samples, curve);
+
+    if (dev > MAX_DEVIATION) {
+      finalizeWithBlend(curve);
+      redraw();
+      markSplit(curve.P2.x, curve.P2.y);
+      addMarkers(path.getTotalLength());
+      startNext(curve);
+    } else {
+      redraw(curve);
+    }
+
+    updateMarkers();
+  });
+
+  svg.addEventListener("mouseup", () => {
+    drawing = false;
+    if (samples.length >= 3) {
+      finalizeWithBlend(fitQuadratic(samples, lastSeg()));
+      redraw();
+      markSplit(
+        segments[segments.length - 1].P2.x,
+        segments[segments.length - 1].P2.y
+      );
+      addMarkers(path.getTotalLength());
+      updateMarkers();
+    }
+  });
+
+  // ---------------- CORE ----------------
+  function lastSeg() {
+    return segments.length ? segments[segments.length - 1] : null;
+  }
+
+  function finalizeWithBlend(curve) {
+    const prev = lastSeg();
+    if (prev) {
+      const blend = makeBlend(prev, curve);
+      blends.push(blend);
+    }
+    segments.push(curve);
+  }
+
+  function startNext(prev) {
+    samples = [{ x: prev.P2.x, y: prev.P2.y }];
+  }
+
+  function makeBlend(a, b) {
+    const t1 = tangentDir(a.P1, a.P2);
+    const t2 = tangentDir(b.P0, b.P1);
+    const P0 = { x: a.P2.x + t1.x * BLEND_LEN, y: a.P2.y + t1.y * BLEND_LEN };
+    const P2 = { x: b.P0.x + t2.x * BLEND_LEN, y: b.P0.y + t2.y * BLEND_LEN };
+    const P1 = { x: a.P2.x, y: a.P2.y };
+    return { P0, P1, P2 };
+  }
+
+  function tangentDir(a, b) {
+    let dx = b.x - a.x,
+      dy = b.y - a.y;
+    const l = Math.hypot(dx, dy) || 1;
+    return { x: dx / l, y: dy / l };
+  }
+
+  // ---------------- DRAW ----------------
+  function redraw(live = null) {
+    let d = "";
+    if (segments.length) {
+      const s0 = segments[0];
+      d += `M ${s0.P0.x} ${s0.P0.y} `;
+      for (let i = 0; i < segments.length; i++) {
+        d += `Q ${segments[i].P1.x} ${segments[i].P1.y} ${segments[i].P2.x} ${segments[i].P2.y} `;
+        if (blends[i]) {
+          const b = blends[i];
+          d += `Q ${b.P1.x} ${b.P1.y} ${b.P2.x} ${b.P2.y} `;
+        }
+      }
+    }
+    if (live) {
+      if (!segments.length) {
+        d += `M ${live.P0.x} ${live.P0.y} `;
+      }
+      d += `Q ${live.P1.x} ${live.P1.y} ${live.P2.x} ${live.P2.y}`;
+    }
+    path.setAttribute("d", d);
+    updateMarkers(); // ensure markers follow path
+  }
+
+  function drawDot(x, y) {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", x);
+    c.setAttribute("cy", y);
+    c.setAttribute("r", 2);
+    c.setAttribute("fill", "red");
+    c.setAttribute("class", "dot");
+    svg.appendChild(c);
+  }
+
+  // 🔴 SPLIT MARKER
+  function markSplit(x, y) {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", x);
+    c.setAttribute("cy", y);
+    c.setAttribute("r", 10);
+    c.setAttribute("fill", "red");
+    c.setAttribute("opacity", "0.6");
+    c.setAttribute("class", "split");
+    svg.appendChild(c);
+  }
+
+  // ---------------- MARKERS ----------------
+  function addMarkers(l) {
+    const before = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "circle"
+    );
+    const center = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "circle"
+    );
+    const after = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "circle"
+    );
+
+    for (const c of [before, center, after]) {
+      c.setAttribute("r", 10);
+      c.setAttribute("fill", "blue");
+      c.setAttribute("class", "marker");
+      svg.appendChild(c);
+    }
+
+    markers.push({ l, before, center, after });
+  }
+
+  function updateMarkers() {
+    const totalLength = path.getTotalLength();
+    for (const m of markers) {
+      const l = m.l;
+      if (totalLength >= l + VARIABLE) {
+        const pCenter = path.getPointAtLength(l);
+        const pBefore = path.getPointAtLength(l - VARIABLE);
+        const pAfter = path.getPointAtLength(l + VARIABLE);
+
+        m.center.setAttribute("cx", pCenter.x);
+        m.center.setAttribute("cy", pCenter.y);
+        m.before.setAttribute("cx", pBefore.x);
+        m.before.setAttribute("cy", pBefore.y);
+        m.after.setAttribute("cx", pAfter.x);
+        m.after.setAttribute("cy", pAfter.y);
+      }
+    }
+  }
+
+  // ---------------- MATH ----------------
+  function fitQuadratic(points, prev) {
+    const n = points.length;
+    const P0 = prev ? prev.P2 : points[0];
+    const P2 = points[n - 1];
+
+    let t = [0],
+      total = 0;
+    for (let i = 1; i < n; i++) {
+      total += Math.hypot(
+        points[i].x - points[i - 1].x,
+        points[i].y - points[i - 1].y
+      );
+      t.push(total);
+    }
+    for (let i = 0; i < n; i++) t[i] /= total || 1;
+
+    let numX = 0,
+      numY = 0,
+      den = 0;
+    for (let i = 1; i < n - 1; i++) {
+      const ti = t[i],
+        b = 2 * (1 - ti) * ti;
+      const px = points[i].x - (1 - ti) ** 2 * P0.x - ti ** 2 * P2.x;
+      const py = points[i].y - (1 - ti) ** 2 * P0.y - ti ** 2 * P2.y;
+      numX += b * px;
+      numY += b * py;
+      den += b * b;
+    }
+    return { P0, P1: { x: numX / den, y: numY / den }, P2 };
+  }
+
+  function maxDeviation(points, curve) {
+    let max = 0;
+    for (const p of points) {
+      let best = Infinity;
+      for (let t = 0; t <= 1; t += 0.02) {
+        const x =
+          (1 - t) ** 2 * curve.P0.x +
+          2 * (1 - t) * t * curve.P1.x +
+          t ** 2 * curve.P2.x;
+        const y =
+          (1 - t) ** 2 * curve.P0.y +
+          2 * (1 - t) * t * curve.P1.y +
+          t ** 2 * curve.P2.y;
+        best = Math.min(best, Math.hypot(x - p.x, y - p.y));
+      }
+      max = Math.max(max, best);
+    }
+    return max;
+  }
+</script>
