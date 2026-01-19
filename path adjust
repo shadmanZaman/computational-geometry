@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
+        background: #1a1a1a;
+        color: white;
+      }
+      svg {
+        background: #222;
+        border-radius: 8px;
+        cursor: crosshair;
+        margin: 20px;
+      }
+      .guide {
+        stroke: #444;
+        stroke-dasharray: 5;
+      }
+      .q-line {
+        stroke: #ff4444;
+        stroke-width: 1;
+        stroke-dasharray: 2;
+      }
+      path {
+        fill: none;
+        stroke: #00d4ff;
+        stroke-width: 3;
+      }
+      circle {
+        cursor: move;
+      }
+      .label {
+        font-size: 12px;
+        fill: #aaa;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Constrained Anchor Quadratic Curve</h2>
+    <p>Q is forced to stay on the red line extending from P1.</p>
+    <svg id="canvas" width="800" height="500">
+      <line id="qLine" class="q-line" />
+      <path id="curve" />
+      <circle id="p1" r="6" fill="#00d4ff" />
+      <circle id="p2" r="6" fill="#00d4ff" />
+      <circle id="target" r="8" fill="#00ff88" />
+      <circle id="q" r="6" fill="#ff4444" />
+    </svg>
+
+    <script>
+      const state = {
+        p1: { x: 100, y: 400 },
+        p2: { x: 700, y: 400 },
+        target: { x: 400, y: 150 },
+        // This defines the fixed line direction Q must live on
+        qDir: { x: 400, y: 50 },
+      };
+
+      const svg = document.getElementById("canvas");
+      let dragging = null;
+
+      function update() {
+        const { p1, p2, target, qDir } = state;
+
+        // 1. Get the direction vector of the line P1 -> Q
+        const vx = qDir.x - p1.x;
+        const vy = qDir.y - p1.y;
+
+        // 2. Solve for 't' (the point on the curve)
+        // Formula derived from: T = (1-t)^2*P1 + 2(1-t)t*Q + t^2*P2
+        // Where Q = P1 + k*V
+        // This simplifies to a linear look for k, numerically
+        // We can solve for t by checking the cross product of (T - CurvePoint) and the line vector
+        // But its complicated
+
+        let bestT = 0.5;
+        let minErr = Infinity;
+
+        // We use a numerical approach for the most robust "passing through"
+        // because solving the cubic for t can be unstable in JS
+        for (let t = 0.01; t < 1; t += 0.001) {
+          const invT = 1 - t;
+          // The components of the curve equation without the 'k' part
+          const base_x = invT * invT * p1.x + t * t * p2.x;
+          const base_y = invT * invT * p1.y + t * t * p2.y;
+
+          // The coefficient for k: 2 * (1-t) * t
+          const coeffK = 2 * invT * t;
+
+          // We want (base + coeffK*(P1 + k*V)) to hit Target
+          // Solving for k in x and y should give same result.
+          // k = (Target.x - base_x - coeffK*p1.x) / (coeffK * vx)
+          const k = (target.x - base_x - coeffK * p1.x) / (coeffK * vx);
+
+          // Calculate where the Y would be with this k
+          const projectedY = base_y + coeffK * (p1.y + k * vy);
+          const err = Math.abs(projectedY - target.y);
+
+          if (err < minErr) {
+            minErr = err;
+            bestT = t;
+          }
+        }
+
+        // 3. Final calculation of Q using the best T found
+        const t = bestT;
+        const invT = 1 - t;
+        const coeffK = 2 * invT * t;
+        const base_x = invT * invT * p1.x + t * t * p2.x;
+        const k = (target.x - base_x - coeffK * p1.x) / (coeffK * vx);
+
+        const q = {
+          x: p1.x + k * vx,
+          y: p1.y + k * vy,
+        };
+
+        // Update Visuals
+        document.getElementById("p1").setAttribute("cx", p1.x);
+        document.getElementById("p1").setAttribute("cy", p1.y);
+        document.getElementById("p2").setAttribute("cx", p2.x);
+        document.getElementById("p2").setAttribute("cy", p2.y);
+        document.getElementById("target").setAttribute("cx", target.x);
+        document.getElementById("target").setAttribute("cy", target.y);
+        document.getElementById("q").setAttribute("cx", q.x);
+        document.getElementById("q").setAttribute("cy", q.y);
+
+        document.getElementById("qLine").setAttribute("x1", p1.x);
+        document.getElementById("qLine").setAttribute("y1", p1.y);
+        // Extend the line visually
+        document.getElementById("qLine").setAttribute("x2", p1.x + vx * 10);
+        document.getElementById("qLine").setAttribute("y2", p1.y + vy * 10);
+
+        document
+          .getElementById("curve")
+          .setAttribute("d", `M${p1.x},${p1.y} Q${q.x},${q.y} ${p2.x},${p2.y}`);
+      }
+
+      // Interactivity
+      [p1, p2, target].forEach((el) => {
+        el.addEventListener("mousedown", (e) => (dragging = e.target.id));
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        const rect = svg.getBoundingClientRect();
+        state[dragging].x = e.clientX - rect.left;
+        state[dragging].y = e.clientY - rect.top;
+        update();
+      });
+
+      window.addEventListener("mouseup", () => (dragging = null));
+
+      update();
+    </script>
+  </body>
+</html>
